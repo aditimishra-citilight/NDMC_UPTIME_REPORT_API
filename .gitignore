@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Generated Excel reports and large data files
+*.xlsx
+
+# Excel lock/temp files
+~$*
+
+# Background task output / logs
+*.output
+*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+
+# Claude Code harness config
+.claude/

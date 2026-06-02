@@ -12,7 +12,12 @@ In a single run it fetches, for all 6 zones:
 - **Uptime Report** → Desired & Actual kWh (columns J, K)
 
 It then computes the formula columns (F = E−G, I = F/E, L = K/J), applies the
-business rules, and writes the finished workbook — no manual pivots or VLOOKUPs.
+business rules, and writes the finished, fully-styled workbook (via **ExcelJS**) —
+no manual pivots or VLOOKUPs.
+
+**📘 For the complete reference** — tech stack, every library, the end-to-end data flow,
+API sources, column logic, Excel formatting, and all commands — see
+[`PROJECT_OVERVIEW.md`](PROJECT_OVERVIEW.md).
 
 ## Usage
 
@@ -47,4 +52,5 @@ and do not push it.
 | `NdmcUptimeReport.js` | Main report generator |
 | `probe.js` | Quick cookie/domain check before a long run |
 | `verify.js` | Sanity-check the generated workbook's columns |
+| `PROJECT_OVERVIEW.md` | Complete reference: tech, libraries, flow, columns, commands |
 | `RUN_GUIDE.md` | Full monthly run instructions |

@@ -1,5 +1,5 @@
 const axios = require("axios");
-const XLSX = require("xlsx");
+const ExcelJS = require("exceljs");
 const https = require("https");
 
 // ============================================================================
@@ -267,8 +267,11 @@ async function fetchUptimeAggregated(cityId, startDate, endDate, deviceArray, ch
             const r = part[i];
             const id = r.device_name;
             if (!id) continue;
-            expectedKwh.set(id, (expectedKwh.get(id) || 0) + (Number(r.expected_kwh) || 0));
-            actualKwh.set(id,   (actualKwh.get(id)   || 0) + (Number(r.actual_kwh)   || 0));
+            // Round each day to 2 decimals BEFORE summing, so the per-device total
+            // matches the manual pivot — which sums the already-2dp exported daily values,
+            // not the raw API floats. (Closes the ~0.04 gap, e.g. 501.37 → 501.33.)
+            expectedKwh.set(id, (expectedKwh.get(id) || 0) + Number((Number(r.expected_kwh) || 0).toFixed(2)));
+            actualKwh.set(id,   (actualKwh.get(id)   || 0) + Number((Number(r.actual_kwh)   || 0).toFixed(2)));
         }
         totalRows += part.length;
     }));
@@ -356,22 +359,78 @@ async function buildZoneRows(zone, dateRange) {
     });
 }
 
-function buildSheet(zone, rows) {
-    const title = `Monthly uptime and Energy Consumption Report ${zone.cityName} Zone - ${MONTH_NAMES[REPORT_MONTH-1]}${REPORT_YEAR}`;
-    const aoa = [[title], HEADERS, ...rows];
-    const sheet = XLSX.utils.aoa_to_sheet(aoa);
+// Per-column layout to mirror the manual report exactly (1-based column → settings).
+// numFmt: every numeric column shows 2 decimals; I and L are 2-decimal percentages.
+// align: text columns left/centre, numbers right.
+const COLUMN_SPEC = [
+    { width: 6,  align: "center", numFmt: null },      // A  SNo.
+    { width: 18, align: "left",   numFmt: null },      // B  Switch ID
+    { width: 9,  align: "center", numFmt: null },      // C  Month
+    { width: 12, align: "right",  numFmt: "0.00" },    // D  Connected Load
+    { width: 14, align: "right",  numFmt: "0.00" },    // E  Night Duration
+    { width: 12, align: "right",  numFmt: "0.00" },    // F  Actual Hours
+    { width: 14, align: "right",  numFmt: "0.00" },    // G  Power Failure
+    { width: 14, align: "right",  numFmt: "0.00" },    // H  Abnormalities
+    { width: 13, align: "right",  numFmt: "0.00%" },   // I  Load Uptime %
+    { width: 13, align: "right",  numFmt: "0.00" },    // J  Desired kWh
+    { width: 13, align: "right",  numFmt: "0.00" },    // K  Actual kWh
+    { width: 14, align: "right",  numFmt: "0.00%" },   // L  Actual kWh %
+];
 
-    // Format I (col 9) and L (col 12) as percentages with 2 decimals;
-    // H (col 8) as a plain 2-decimal number so it shows "0.00".
-    for (let r = 2; r < aoa.length; r++) {
-        for (const col of [8, 11]) {
-            const addr = XLSX.utils.encode_cell({ r, c: col });
-            if (sheet[addr] && typeof sheet[addr].v === "number") sheet[addr].z = "0.00%";
-        }
-        const hAddr = XLSX.utils.encode_cell({ r, c: 7 });
-        if (sheet[hAddr] && typeof sheet[hAddr].v === "number") sheet[hAddr].z = "0.00";
+// Header row tall enough that the longest wrapped title ("Night Duration/ Estimated
+// time of Operation (Hours)") never gets clipped. Vertical-centred, so extra space
+// just pads evenly — generous is safe, clipping is not.
+const HEADER_ROW_HEIGHT = 95;
+
+const THIN = { style: "thin", color: { argb: "FF000000" } };
+const ALL_BORDERS = { top: THIN, left: THIN, bottom: THIN, right: THIN };
+const NCOLS = COLUMN_SPEC.length;
+
+function buildSheet(workbook, zone, rows) {
+    const title = `Monthly uptime and Energy Consumption Report ${zone.cityName} Zone - ${MONTH_NAMES[REPORT_MONTH-1]}${REPORT_YEAR}`;
+    // Freeze the title + header (rows 1-2). topLeftCell/activeCell anchor the scrolling
+    // body at A3 so the header doesn't appear a second time at the top of the body pane.
+    const ws = workbook.addWorksheet(zone.sheetName, {
+        views: [{ state: "frozen", xSplit: 0, ySplit: 2, topLeftCell: "A3", activeCell: "A3" }],
+    });
+
+    // Column widths.
+    COLUMN_SPEC.forEach((spec, i) => { ws.getColumn(i + 1).width = spec.width; });
+
+    // Row 1: merged, bold, centred title with a border around the whole band.
+    ws.addRow([title]);
+    ws.mergeCells(1, 1, 1, NCOLS);
+    for (let c = 1; c <= NCOLS; c++) {
+        const cell = ws.getCell(1, c);
+        cell.font = { bold: true, size: 12 };
+        cell.alignment = { horizontal: "center", vertical: "middle" };
+        cell.border = ALL_BORDERS;
     }
-    return sheet;
+    ws.getRow(1).height = 22;
+
+    // Row 2: bold, centred, wrapped headers.
+    ws.addRow(HEADERS);
+    const headerRow = ws.getRow(2);
+    headerRow.height = HEADER_ROW_HEIGHT;
+    headerRow.eachCell({ includeEmpty: true }, (cell, c) => {
+        if (c > NCOLS) return;
+        cell.font = { bold: true };
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        cell.border = ALL_BORDERS;
+    });
+
+    // Data rows: per-column alignment, number format and full borders.
+    for (const r of rows) {
+        const row = ws.addRow(r);
+        row.eachCell({ includeEmpty: true }, (cell, c) => {
+            if (c > NCOLS) return;
+            const spec = COLUMN_SPEC[c - 1];
+            cell.alignment = { horizontal: spec.align, vertical: "middle" };
+            if (spec.numFmt && typeof cell.value === "number") cell.numFmt = spec.numFmt;
+            cell.border = ALL_BORDERS;
+        });
+    }
+    return ws;
 }
 
 async function main() {
@@ -379,19 +438,19 @@ async function main() {
     console.log(`NDMC Uptime Report — ${monthLabel()}`);
     console.log(`Date range: ${dateRange.startDate} → ${dateRange.endDate}`);
 
-    const workbook = XLSX.utils.book_new();
+    const workbook = new ExcelJS.Workbook();
     const summary = [];
 
     for (const zone of ZONES) {
         try {
             const rows = await buildZoneRows(zone, dateRange);
-            XLSX.utils.book_append_sheet(workbook, buildSheet(zone, rows), zone.sheetName);
+            buildSheet(workbook, zone, rows);
             summary.push({ zone: zone.sheetName, switches: rows.length, status: "OK" });
             await new Promise(r => setTimeout(r, 2000));
         } catch (err) {
             console.error(`  [${zone.sheetName}] FAILED: ${err.message}`);
             summary.push({ zone: zone.sheetName, switches: 0, status: `FAIL: ${err.message}` });
-            XLSX.utils.book_append_sheet(workbook, buildSheet(zone, []), zone.sheetName);
+            buildSheet(workbook, zone, []);
         }
     }
 
@@ -400,11 +459,11 @@ async function main() {
     const filename = reportFilename();
     let written = filename;
     try {
-        XLSX.writeFile(workbook, filename);
+        await workbook.xlsx.writeFile(filename);
     } catch (err) {
         if (err.code === "EBUSY" || err.code === "EPERM") {
             const fallback = filename.replace(/\.xlsx$/, `_NEW.xlsx`);
-            XLSX.writeFile(workbook, fallback);
+            await workbook.xlsx.writeFile(fallback);
             written = fallback;
             console.log(`\n⚠️  "${filename}" was open in Excel — saved to "${fallback}" instead.`);
             console.log(`    Close Excel, delete the old file, and rename "${fallback}" → "${filename}".`);

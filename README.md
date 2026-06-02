@@ -21,15 +21,18 @@ API sources, column logic, Excel formatting, and all commands — see
 
 ## Usage
 
-1. Get a fresh `JSESSIONID` cookie from `https://smartlight.citilight.co:446`
-   (see `RUN_GUIDE.md` for the exact steps).
-2. In `NdmcUptimeReport.js`, set `REPORT_YEAR`, `REPORT_MONTH`, the date range, and
-   paste the cookie into `JSESSIONID`.
-3. Run:
-   ```powershell
-   npm install
-   node NdmcUptimeReport.js
-   ```
+**No cookie needed** — the tool logs in for you. Just run it and answer 3 prompts.
+
+- **Easiest:** double-click **`run-report.bat`**.
+- **Or PowerShell:**
+  ```powershell
+  cd D:\CityReport
+  node NdmcUptimeReport.js
+  ```
+
+It asks: **which month**, which year, and your portal **username / password** — then logs
+in automatically, generates the report (~10–15 min), and opens the Excel file. To skip the
+prompts (automation), set `NDMC_MONTH`, `NDMC_YEAR`, `NDMC_USER`, `NDMC_PASS` env vars.
 
 Full step-by-step instructions, troubleshooting, and the column source mapping are in
 [`RUN_GUIDE.md`](RUN_GUIDE.md).
@@ -41,16 +44,17 @@ operational + uptime running in parallel per zone. A full month runs in ~10–15
 
 ## Security
 
-⚠️ **Never commit a real `JSESSIONID`.** The cookie is a live session credential; the
-files here ship with a `PASTE_YOUR_COOKIE_HERE` placeholder. Paste your cookie locally
-and do not push it.
+⚠️ **Never commit credentials.** The portal username/password are entered at runtime (or
+read from `NDMC_USER` / `NDMC_PASS` env vars) — they are never hardcoded in the code or
+committed. Generated `.xlsx` files are git-ignored.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `NdmcUptimeReport.js` | Main report generator |
-| `probe.js` | Quick cookie/domain check before a long run |
+| `NdmcUptimeReport.js` | Main report generator (auto-login + styled Excel output) |
+| `run-report.bat` | Double-click launcher: prompts for month + credentials, runs, opens the file |
+| `probe.js` | Quick portal connectivity check |
 | `verify.js` | Sanity-check the generated workbook's columns |
 | `PROJECT_OVERVIEW.md` | Complete reference: tech, libraries, flow, columns, commands |
 | `RUN_GUIDE.md` | Full monthly run instructions |

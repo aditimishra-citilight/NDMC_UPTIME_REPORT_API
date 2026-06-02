@@ -56,19 +56,19 @@ npm install
 ## 3. Where the data comes from — the portal APIs
 
 Base URL: `https://smartlight.citilight.co:446`
-Auth: a **`JSESSIONID`** session cookie (obtained from the browser after logging in).
+Auth: the script **logs in automatically** — it POSTs the username + password to
+`/smartlight/login` (form-urlencoded) and captures the **`JSESSIONID`** session cookie
+from the response, then uses it for all data calls. No manual cookie copying from the
+browser. Credentials are typed at runtime (or read from `NDMC_USER` / `NDMC_PASS`).
 
-> ⚠️ The cookie **must** come from `smartlight.citilight.co:446` — **not** `dc.citilight.co`.
-> They look identical but a `dc` cookie fails silently (every zone errors with
-> `.map is not a function`).
+Four endpoints are used:
 
-Three endpoints are used (all `POST`, JSON body):
-
-| # | Endpoint | Gives us | Used for columns |
-|---|---|---|---|
-| 1 | `/smartlight/getListViewData_v1` (Live Data Feed) | switch list, names, connected load | B (Switch ID), D (Connected Load) |
-| 2 | `/VELOCITi_API/api/ccmsOperationalreportallData` (Operational Report) | per-switch nightly expected/off hours | E (Night hours), G (Power Failure) |
-| 3 | `/smartlight/getUptimeReport` (Uptime Report) | per-switch daily expected & actual kWh | J (Desired kWh), K (Actual kWh) |
+| # | Endpoint | Method | Gives us | Used for |
+|---|---|---|---|---|
+| 0 | `/smartlight/login` | POST (form) | the `JSESSIONID` session cookie | auth |
+| 1 | `/smartlight/getListViewData_v1` (Live Data Feed) | POST (JSON) | switch list, names, connected load | B (Switch ID), D (Connected Load) |
+| 2 | `/VELOCITi_API/api/ccmsOperationalreportallData` (Operational Report) | POST (JSON) | per-switch nightly expected/off hours | E (Night hours), G (Power Failure) |
+| 3 | `/smartlight/getUptimeReport` (Uptime Report) | POST (JSON) | per-switch daily expected & actual kWh | J (Desired kWh), K (Actual kWh) |
 
 Long date ranges are split into **4-day chunks** because the portal times out / returns
 502 on large ranges.
@@ -79,9 +79,9 @@ Long date ranges are split into **4-day chunks** because the portal times out / 
 
 ```
                          ┌─────────────────────────────────────────┐
-                         │  CONFIG (top of NdmcUptimeReport.js)      │
-                         │  REPORT_YEAR / REPORT_MONTH / dates       │
-                         │  JSESSIONID cookie                        │
+                         │  PROMPT: which month/year + username/pass │
+                         │  → LOGIN (POST /smartlight/login)         │
+                         │  → JSESSIONID acquired automatically      │
                          └───────────────────┬───────────────────────┘
                                              │
               for each of the 6 zones ───────┤
@@ -181,51 +181,35 @@ These are defined by `COLUMN_SPEC`, `HEADER_ROW_HEIGHT`, and `buildSheet()` in
 ## 7. How to get the Excel (step-by-step)
 
 ### Prerequisites (one time)
-- **Node.js** installed (`node --version` to check).
-- In `D:\CityReport`, run `npm install` once to install dependencies.
-- A login on `https://smartlight.citilight.co:446`.
+- **Node.js** installed (`node --version` to check). The `.bat` runs `npm install` for you
+  on the first run.
+- A **portal login** (username + password) for `https://smartlight.citilight.co:446`.
 
-### Each run
-1. **Get a fresh `JSESSIONID` cookie** (sessions expire in a few hours):
-   - Log into `https://smartlight.citilight.co:446` in Chrome/Edge.
-   - Open `…/smartlight/livedatafeed`, pick a city, click **Get Data**.
-   - Press **F12 → Network**, filter `getListViewData`, click the
-     `getListViewData_v1` request.
-   - In **Headers → Request Headers**, copy the 32-char hex value after
-     `JSESSIONID=` (no `JSESSIONID=`, no `;`, no spaces).
-   - *(Full screenshots in [`RUN_GUIDE.md`](RUN_GUIDE.md).)*
-2. **Edit the config** at the top of `NdmcUptimeReport.js`:
-   ```js
-   const REPORT_YEAR  = 2026;          // line 9
-   const REPORT_MONTH = 5;             // line 10  (1=Jan … 12=Dec)
-   const CUSTOM_START_DATE = "";       // line 14  ("" = full month) or "2026-05-01"
-   const CUSTOM_END_DATE   = "";       // line 15  ("" = full month) or "2026-05-31"
-   const JSESSIONID = "PASTE_YOUR_COOKIE_HERE";  // line 17  ← paste your cookie
+### Each run — no cookie, no code editing
+1. **Double-click `run-report.bat`** (or in PowerShell: `cd D:\CityReport; node NdmcUptimeReport.js`).
+2. Answer the 3 prompts:
    ```
-3. **Close** any open copy of the target Excel file (avoids a file lock).
-4. **Run it:**
-   ```powershell
-   cd D:\CityReport
-   node NdmcUptimeReport.js
+   Which month do you want the report for? Enter 1-12 (1=Jan … 12=Dec): 5
+   Which year? Press Enter for 2026:
+   Portal username: admin
+   Portal password: ********        (hidden as you type)
    ```
-5. **Watch the console.** Each zone prints its chunks, then a final summary:
+3. It **logs in automatically**, fetches all 6 zones, prints a summary, and **opens the
+   Excel file** when done:
    ```
-   --- Summary ---
-     SP              133 switches  OK
-     ...
+   Report: May-26   (2026-05-01 → 2026-05-31)
+   Login OK — session acquired.
+   ...
    Written: NDMC_UptimeReport_May2026.xlsx
    ```
-6. **Open the file:**
-   ```powershell
-   start D:\CityReport\NDMC_UptimeReport_May2026.xlsx
-   ```
+
+To skip the prompts (automation/scheduling), set env vars instead: `NDMC_MONTH`,
+`NDMC_YEAR`, `NDMC_USER`, `NDMC_PASS`.
 
 > If the target file is open in Excel when the script finishes, it won't crash — it
 > saves to `<name>_NEW.xlsx` and tells you to close Excel and rename.
 
 ### Quick checks
-- **Before** a long run, test the cookie: `node probe.js` (one fast call; prints whether
-  the cookie works).
 - **After** a run, sanity-check the workbook: `node verify.js` (prints per-zone row
   counts and rule checks).
 
@@ -248,10 +232,11 @@ chunks**, you can try `5`. If you see `FAIL: 502`, lower it back to `3`.
 
 | File | Purpose |
 |---|---|
-| `NdmcUptimeReport.js` | **Main generator** — fetch, aggregate, compute, style, write |
-| `probe.js` | Quick cookie/domain check before a long run |
+| `NdmcUptimeReport.js` | **Main generator** — login, fetch, aggregate, compute, style, write |
+| `run-report.bat` | **Double-click launcher** — prompts for month + credentials, runs, opens the file |
+| `probe.js` | Quick portal connectivity check |
 | `verify.js` | Read-back sanity checks on the generated workbook |
-| `RUN_GUIDE.md` | Click-by-click monthly run guide (incl. cookie screenshots) |
+| `RUN_GUIDE.md` | Step-by-step monthly run guide |
 | `PROJECT_OVERVIEW.md` | This file — tech, flow, libraries, full reference |
 | `WORK_LOG_*.md` | Dated work/decision notes |
 | `package.json` / `package-lock.json` | Dependencies |
@@ -261,6 +246,7 @@ chunks**, you can try `5`. If you see `FAIL: 502`, lower it back to `3`.
 
 ## 10. Security
 
-⚠️ **Never commit a real `JSESSIONID`.** It is a live session credential. All committed
-files ship with the `PASTE_YOUR_COOKIE_HERE` placeholder; paste your cookie **locally
-only** and keep that one line out of any commit. Generated `.xlsx` files are git-ignored.
+⚠️ **Never commit credentials.** The portal username/password are entered at runtime
+(prompt) or read from `NDMC_USER` / `NDMC_PASS` env vars — they are **never** hardcoded in
+the source or committed. Generated `.xlsx` files are git-ignored. The `admin` account is
+high-privilege, so rotate its password periodically.

@@ -1,20 +1,33 @@
 const axios = require("axios");
 const ExcelJS = require("exceljs");
 const https = require("https");
+const readline = require("readline");
 
 // ============================================================================
 // CONFIG — change these three things each month before running
 // ============================================================================
 
-const REPORT_YEAR  = 2026;
-const REPORT_MONTH = 5;  // 1=Jan … 12=Dec
+// Report period. Leave as 0 to be PROMPTED at runtime ("Which month?"). Set a number
+// to skip the prompt. Env vars NDMC_MONTH / NDMC_YEAR override too.
+let REPORT_YEAR  = Number(process.env.NDMC_YEAR)  || 0;   // 0 → ask (default: current year)
+let REPORT_MONTH = Number(process.env.NDMC_MONTH) || 0;   // 0 → ask (1=Jan … 12=Dec)
 
-// Optional: override REPORT_MONTH with an explicit date range. Set both, or leave both "" to use the month.
-// Format: "YYYY-MM-DD". Useful for quick test runs (e.g. "2026-05-01" → "2026-05-02") or fiscal-week reports.
-const CUSTOM_START_DATE = "2026-05-01";
-const CUSTOM_END_DATE   = "2026-05-31";
+// Advanced: an explicit date range overrides the month entirely. Leave both "" for a
+// normal full-month report. Format "YYYY-MM-DD".
+const CUSTOM_START_DATE = "";
+const CUSTOM_END_DATE   = "";
 
-const JSESSIONID = "PASTE_YOUR_COOKIE_HERE";
+// Auth: the script logs in automatically via the portal's /smartlight/login API to
+// obtain a fresh JSESSIONID — no need to copy a cookie from the browser. Credentials
+// are read from env vars NDMC_USER / NDMC_PASS, or prompted in the terminal at runtime.
+// They are never hardcoded here or committed. (Optional: paste a JSESSIONID into
+// MANUAL_JSESSIONID to skip login entirely; leave "" to auto-login.)
+const MANUAL_JSESSIONID = "";
+const PORTAL_USERNAME = process.env.NDMC_USER || "";
+const PORTAL_PASSWORD = process.env.NDMC_PASS || "";
+
+// Set after login; every request reads its cookie from here.
+let SESSION_COOKIE = MANUAL_JSESSIONID;
 
 const CONNECTED_LOAD_ZERO_RANGE   = [0.1,  0.80];
 const POWER_FAILURE_HIGH_THRESHOLD = 2.0;
@@ -83,8 +96,109 @@ const makeHeaders = (referer) => ({
     "Accept": "*/*",
     "Origin": BASE,
     "Referer": referer,
-    "Cookie": `JSESSIONID=${JSESSIONID}`,
+    "Cookie": `JSESSIONID=${SESSION_COOKIE}`,
 });
+
+// ----------------------------------------------------------------------------
+// Auto-login — replaces the manual "copy JSESSIONID from the browser" step.
+// ----------------------------------------------------------------------------
+
+// Pull the JSESSIONID value out of one or more Set-Cookie header strings.
+function extractJsessionid(setCookie) {
+    if (!setCookie) return null;
+    const list = Array.isArray(setCookie) ? setCookie : [setCookie];
+    for (const c of list) {
+        const m = /JSESSIONID=([^;]+)/i.exec(c);
+        if (m) return m[1];
+    }
+    return null;
+}
+
+// Log into the portal exactly like the website's login form: GET the login page to
+// seed a session, then POST username/password (form-urlencoded). Returns the
+// authenticated JSESSIONID (the rotated one if the server issues a new cookie on
+// login, otherwise the seeded one).
+async function login(username, password) {
+    const loginUrl = `${BASE}/smartlight/login`;
+    const common = { httpsAgent, timeout: 60000, maxRedirects: 0, validateStatus: () => true };
+
+    const seed = await axios.get(loginUrl, common);
+    let sid = extractJsessionid(seed.headers["set-cookie"]);
+
+    const form = `username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+    const res = await axios.post(loginUrl, form, {
+        ...common,
+        headers: {
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": BASE,
+            "Referer": loginUrl,
+            ...(sid ? { Cookie: `JSESSIONID=${sid}` } : {}),
+        },
+    });
+    sid = extractJsessionid(res.headers["set-cookie"]) || sid;
+    if (!sid) throw new Error("login: server did not return a JSESSIONID cookie");
+    return sid;
+}
+
+// Prompt for a line of input. With { hidden:true } the typed characters are masked.
+function ask(question, { hidden = false } = {}) {
+    return new Promise((resolve) => {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+        if (hidden) {
+            rl._writeToOutput = (s) => rl.output.write(s.includes(question) ? question : "*");
+        }
+        rl.question(question, (answer) => {
+            rl.close();
+            if (hidden) process.stdout.write("\n");
+            resolve(answer.trim());
+        });
+    });
+}
+
+// Ensure SESSION_COOKIE holds a working JSESSIONID: use a manual one if provided,
+// otherwise gather credentials (env vars or prompt) and log in. Verifies the session
+// with a real data call so wrong credentials fail fast with a clear message.
+async function ensureSession() {
+    if (MANUAL_JSESSIONID && MANUAL_JSESSIONID !== "PASTE_YOUR_COOKIE_HERE") {
+        SESSION_COOKIE = MANUAL_JSESSIONID;
+        console.log("Using JSESSIONID from MANUAL_JSESSIONID (skipping login).");
+        return;
+    }
+    const username = PORTAL_USERNAME || await ask("Portal username: ");
+    const password = PORTAL_PASSWORD || await ask("Portal password: ", { hidden: true });
+    if (!username || !password) throw new Error("Username and password are required to log in.");
+
+    console.log("Logging in…");
+    SESSION_COOKIE = await login(username, password);
+
+    // Verify the session actually works (wrong password can still hand back a cookie).
+    const test = await fetchLiveData("2");
+    if (!Array.isArray(test)) {
+        throw new Error("Login failed or session invalid — check the username/password.");
+    }
+    console.log("Login OK — session acquired.");
+}
+
+// Resolve which month/year to report on: an explicit CUSTOM range wins; otherwise use
+// REPORT_MONTH/REPORT_YEAR if set, else prompt the user. Keeps asking until valid.
+async function ensureReportPeriod() {
+    if (CUSTOM_START_DATE && CUSTOM_END_DATE) {
+        console.log(`Using custom date range ${CUSTOM_START_DATE} → ${CUSTOM_END_DATE}`);
+        return;
+    }
+    while (!(REPORT_MONTH >= 1 && REPORT_MONTH <= 12)) {
+        const m = await ask("Which month do you want the report for? Enter 1-12 (1=Jan … 12=Dec): ");
+        REPORT_MONTH = Number(m);
+        if (!(REPORT_MONTH >= 1 && REPORT_MONTH <= 12)) console.log("  Please enter a whole number from 1 to 12.");
+    }
+    if (!(REPORT_YEAR >= 2000)) {
+        const def = new Date().getFullYear();
+        const y = await ask(`Which year? Press Enter for ${def}: `);
+        REPORT_YEAR = y ? Number(y) : def;
+        if (!(REPORT_YEAR >= 2000)) REPORT_YEAR = def;
+    }
+}
 
 const monthLabel = () => `${MONTH_NAMES[REPORT_MONTH - 1]}-${String(REPORT_YEAR).slice(-2)}`;
 
@@ -434,9 +548,17 @@ function buildSheet(workbook, zone, rows) {
 }
 
 async function main() {
+    console.log("====================================");
+    console.log("   NDMC Uptime Report Generator");
+    console.log("====================================\n");
+
+    // Ask which month/year to report on (unless preset).
+    await ensureReportPeriod();
     const dateRange = reportDateRange();
-    console.log(`NDMC Uptime Report — ${monthLabel()}`);
-    console.log(`Date range: ${dateRange.startDate} → ${dateRange.endDate}`);
+    console.log(`\nReport: ${monthLabel()}   (${dateRange.startDate} → ${dateRange.endDate})\n`);
+
+    // Acquire a session (auto-login) before any data calls.
+    await ensureSession();
 
     const workbook = new ExcelJS.Workbook();
     const summary = [];
@@ -475,6 +597,14 @@ async function main() {
     console.log("\n--- Summary ---");
     for (const s of summary) console.log(`  ${s.zone.padEnd(14)} ${String(s.switches).padStart(4)} switches  ${s.status}`);
     console.log(`\nWritten: ${written}`);
+
+    // Open the finished report automatically (Windows).
+    if (process.platform === "win32") {
+        try { require("child_process").exec(`start "" "${written}"`); } catch { /* ignore */ }
+    }
 }
 
-main();
+main().catch((err) => {
+    console.error(`\n❌ ${err.message}`);
+    process.exitCode = 1;
+});

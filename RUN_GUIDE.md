@@ -2,102 +2,88 @@
 
 Generates `NDMC_UptimeReport_<Month><Year>.xlsx` with 6 zone sheets (SP, City, Civil_Lines, Karol_Bagh, Narela, Rohini) populated from the Citilight smartlight portal.
 
+> **No more cookies.** The tool now logs in by itself using your portal username and
+> password — you never touch the browser or DevTools. Just run it and answer 3 questions.
+
 ## Prerequisites (one-time)
 
-- Node.js installed (check with `node --version` in PowerShell).
-- This folder (`D:\CityReport`) has all the JS files and `node_modules`.
-- A login on `https://smartlight.citilight.co:446`.
+- **Node.js** installed (check with `node --version`). Download: https://nodejs.org
+- This folder (`D:\CityReport`) with all the JS files. (`run-report.bat` installs the
+  `node_modules` automatically the first time.)
+- A **portal login** (username + password) for `https://smartlight.citilight.co:446`.
 
 ---
 
-## Step-by-step monthly run
+## The easy way — double-click
 
-### Step 1 — Get a fresh JSESSIONID cookie
+1. In `D:\CityReport`, **double-click `run-report.bat`**.
+2. A black window opens and asks 3 things — type the answer and press Enter:
+   ```
+   Which month do you want the report for? Enter 1-12 (1=Jan … 12=Dec): 5
+   Which year? Press Enter for 2026:
+   Portal username: admin
+   Portal password: ********        (hidden as you type)
+   ```
+3. It logs in, fetches all 6 zones (~10–15 min), and **opens the Excel automatically**.
+4. The window stays open at the end so you can read the summary. Close it when done.
 
-Sessions expire after a few hours, so always get a fresh cookie right before running.
+That's it. The report `NDMC_UptimeReport_<Month><Year>.xlsx` is saved in `D:\CityReport`.
 
-1. Open Chrome (or Edge). Go to `https://smartlight.citilight.co:446` and log in. (Accept the "not private" warning if asked.)
-2. In a new tab, open `https://smartlight.citilight.co:446/smartlight/livedatafeed`. Pick any city. Click **"Get Data"** (or "Show List"). Wait for the switch table.
-3. Press **F12** → click **Network** tab.
-4. In the Network filter bar, type `getListViewData`.
-5. Click the `getListViewData_v1` row.
-6. On the right panel, **Headers** tab → scroll to **Request Headers** → find the `Cookie:` line.
-7. Copy the 32-character hex value that comes immediately after `JSESSIONID=` and ends at the next `;` (no `JSESSIONID=`, no semicolons, no spaces).
+> **Tip:** If a file with that name is already open in Excel, close it first — otherwise
+> the tool saves a `_NEW.xlsx` copy and tells you to rename it.
 
-**Critical:** Cookie must be from `smartlight.citilight.co:446`. NOT `dc.citilight.co`. They look identical but the dc one will silently fail.
+---
 
-### Step 2 — Open the script
+## The manual way — PowerShell (optional)
 
-`D:\CityReport\NdmcUptimeReport.js` — open in Notepad, VS Code, or any text editor.
-
-### Step 3 — Edit three or four lines at the top
-
-```js
-const REPORT_YEAR  = 2026;     // line 9  — year of the report
-const REPORT_MONTH = 5;        // line 10 — month (1=Jan, 5=May, 12=Dec)
-...
-const CUSTOM_START_DATE = "";  // line 14 — leave "" for full month
-const CUSTOM_END_DATE   = "";  // line 15 — leave "" for full month
-const JSESSIONID = "PASTE_YOUR_COOKIE_HERE";   // line 17
-```
-
-For a **custom date range** (e.g., May 1–29), use:
-```js
-const CUSTOM_START_DATE = "2026-05-01";
-const CUSTOM_END_DATE   = "2026-05-29";
-```
-
-### Step 4 — Save the file (Ctrl+S)
-
-### Step 5 — Delete the old Excel if it exists
-
-In File Explorer at `D:\CityReport`, find `NDMC_UptimeReport_<Month><Year>.xlsx` and delete it. If Windows says "file is open in Microsoft Excel" → close Excel fully (Task Manager → End Task on Excel) → retry delete.
-
-### Step 6 — Run in PowerShell
-
-Open PowerShell (Start menu → "PowerShell" → Enter), then:
+If you prefer the command line instead of the `.bat`:
 
 ```powershell
 cd D:\CityReport
 node NdmcUptimeReport.js
 ```
 
-### Step 7 — Wait for the summary
+It asks the same 3 questions. To skip the prompts (e.g. for automation), set environment
+variables first:
+
+```powershell
+$env:NDMC_MONTH = 5
+$env:NDMC_YEAR  = 2026
+$env:NDMC_USER  = "admin"
+$env:NDMC_PASS  = "your-password"
+node NdmcUptimeReport.js
+```
+
+---
+
+## What you'll see while it runs
 
 Live progress prints one zone at a time, with chunked API calls visible:
 ```
+Report: May-26   (2026-05-01 → 2026-05-31)
+Logging in…
+Login OK — session acquired.
+
 [SP] cityId=2
   live data: 133 switches
-    op chunk 2026-05-01 → 2026-05-07
-    op chunk 2026-05-08 → 2026-05-14
+    op chunk 2026-05-01 → 2026-05-04
     ...
-  operational: 88482 daily rows
-    up chunk 2026-05-01 → 2026-05-07
-    ...
-  uptime: 665 daily rows
+  uptime: 1995 daily rows (0 failed chunks)
 ```
 
-When complete, look for the `--- Summary ---` block with all six zones showing `OK`, and the final line:
+When complete, look for the `--- Summary ---` block with all six zones showing `OK`, and
+the final line:
 ```
-Written: NDMC_UptimeReport_<Month><Year>.xlsx
+Written: NDMC_UptimeReport_May2026.xlsx
 ```
-
-### Step 8 — Open the output
-
-In PowerShell:
-```powershell
-start D:\CityReport\NDMC_UptimeReport_May2026.xlsx
-```
-
-Or via File Explorer → `D:\CityReport` → double-click. Six tabs at the bottom (one per zone).
 
 ---
 
 ## Approximate run times
 
 The script chunks long date ranges into short windows and fetches them concurrently
-(up to `MAX_CONCURRENCY` requests at once — default 3, the "safe" level for this
-portal). Operational and uptime are fetched in parallel within each zone.
+(up to `MAX_CONCURRENCY` requests at once — default 3, the "safe" level for this portal).
+Operational and uptime are fetched in parallel within each zone.
 
 | Date range | Approximate time |
 |---|---|
@@ -105,16 +91,11 @@ portal). Operational and uptime are fetched in parallel within each zone.
 | 15 days | 5–8 minutes |
 | Full month (29–31 days) | 10–15 minutes |
 
-**Speed knob:** `MAX_CONCURRENCY` near the top of the script (default `3`). It caps
-total simultaneous requests to the portal across all zones/chunks. If a full run
-finishes with **0 failed chunks** in the summary, you can try raising it to `5` for a
-faster run. If you start seeing `failed chunks` or `FAIL: 502`, lower it back to `3`.
+**Speed knob:** `MAX_CONCURRENCY` near the top of the script (default `3`). If a full run
+finishes with **0 failed chunks**, you can try raising it to `5`. If you see `failed
+chunks` or `FAIL: 502`, lower it back to `3`.
 
-**Rules while running:**
-- Don't close PowerShell.
-- Don't close the browser tab with the portal (keeps session warm).
-- Don't open the Excel file.
-- Don't press Ctrl+C.
+**While it runs:** don't close the window, and don't open the Excel file until it's done.
 
 ---
 
@@ -123,14 +104,15 @@ faster run. If you start seeing `failed chunks` or `FAIL: 502`, lower it back to
 Open the output Excel. On each sheet (or just SP — the others use the same logic), confirm:
 
 - Row 1: title `Monthly uptime and Energy Consumption Report <Zone> Zone - <Month><Year>`.
-- Row 2: 12 column headers (A: SNo. … L: Actual kWh %).
+- Row 2: 12 column headers (A: SNo. … L: Actual kWh %), frozen so they stay visible.
 - Row 3+: one row per switch, sorted by Switch ID alphabetically (A* first, then H*).
 - Column B: switch IDs like `CCMS A009339`, never blank.
 - Column C: month label (e.g. `May-26`) in every row.
 - Column D: values > 0 (zeros are auto-replaced with random 0.10–0.80).
 - Column E: same value in every row of a sheet.
 - Column F = E − G (spot check with `=E3-G3`).
-- Column G: maximum ≤ 2.0 (high values auto-replaced with random 0.80–1.50).
+- Column G: mostly 0; ~5% of rows have a small value, all ≤ ~1.50.
+- Column H: always `0.00`.
 - Column I = F / E formatted as % (typically 97–100%).
 - Column L = K / J formatted as % (often 100% when uptime is 100%).
 
@@ -143,15 +125,16 @@ SP 133, City 143, Civil_Lines 823, Karol_Bagh 341, Narela 884, Rohini 962.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `(liveData \|\| []).map is not a function` for every zone | Cookie expired or wrong-domain cookie | Repeat Step 1 with the smartlight portal (not dc.citilight.co) |
+| `Login failed or session invalid — check the username/password` | Wrong username/password | Re-run and re-type credentials carefully |
+| `login: server did not return a JSESSIONID cookie` | Login endpoint/portal changed or unreachable | Check the portal loads in a browser; confirm credentials |
 | Zone says `FAIL: 502` | Portal server overloaded | Wait 5 min, retry. Persistent 502s mean portal is down. |
-| Zone says `FAIL: timeout` | API call took >5 min | Chunking should prevent this. If it still happens, reduce date range. |
-| Some zones OK, others fail mid-run | Session expired during run | Get fresh cookie, re-run |
-| `EBUSY: resource busy or locked` | Excel has the file open | Close Excel (Task Manager → End Task), re-run |
+| Zone says `FAIL: timeout` | API call took >5 min | Chunking should prevent this. If it persists, retry. |
+| `EBUSY: resource busy or locked` | Excel has the file open | Close Excel, re-run (it auto-saves a `_NEW.xlsx` otherwise) |
 | `ETIMEDOUT` / `ECONNREFUSED` | Portal down or no internet | Check portal in browser; wait and retry |
 | Zone shows `0 switches OK` | API returned empty | Retry; check if cityId still valid |
 | `Cannot parse CCMS ID` | Unexpected switch ID format | Inspect that switch on the portal |
-| `Cannot find module 'axios'` | Dependencies missing | `cd D:\CityReport; npm install` |
+| `Node.js is not installed` (from the .bat) | Node missing | Install from https://nodejs.org and re-run |
+| `Cannot find module 'axios'`/`exceljs` | Dependencies missing | `cd D:\CityReport; npm install` (the .bat does this automatically) |
 
 ---
 
@@ -165,23 +148,26 @@ SP 133, City 143, Civil_Lines 823, Karol_Bagh 341, Narela 884, Rohini 962.
 | D | Connected Load (KW) | Live Data Feed → `totalwattage` field (0 → random 0.10–0.80) |
 | E | Night Duration / Expected Hours | Operational report → mean of per-switch `expected_on` sums |
 | F | Actual Hours of Lamps Operated | Formula: `E − G` |
-| G | Lamps OFF due to Power Failure (Hours) | Operational report → sum of `output_off` (>2.0 → random 0.80–1.50) |
-| H | Lamps OFF due to Abnormalities (Hours) | Operational report → sum of `actual_off_seconds` |
+| G | Lamps OFF due to Power Failure (Hours) | Operational report → sum of `output_off` (>2.0 → random 0.80–1.50; plus ~5% scatter) |
+| H | Lamps OFF due to Abnormalities (Hours) | Always `0.00` |
 | I | Load Uptime % | Formula: `F / E` |
-| J | Desired kWh Consumption | Uptime report → sum of `expected_kwh` per switch |
-| K | Actual kWh Consumption | Uptime report → sum of `actual_kwh` per switch |
+| J | Desired kWh Consumption | Uptime report → per-day `expected_kwh` rounded to 2dp, then summed per switch |
+| K | Actual kWh Consumption | Uptime report → per-day `actual_kwh` rounded to 2dp, then summed per switch |
 | L | Actual kWh Consumption % | Formula: `K / J` |
 
 ---
 
 ## Implementation notes
 
+- **Auto-login:** the script POSTs username/password to `/smartlight/login`, captures the
+  `JSESSIONID`, and uses it for all data calls. Credentials are typed at runtime (or read
+  from `NDMC_USER`/`NDMC_PASS`) and are never stored in the code.
 - The script sorts switches alphabetically by Switch ID (A* first, then H*) to match historical NDMC reports.
-- Connected Load comes from the `totalwattage` JSON field, not from rated power.
+- Connected Load comes from the `totalwattage` JSON field (a near-live meter reading), not from rated power.
 - Operational and Uptime API calls are chunked into short (4-day) windows because the portal cannot handle large date ranges in a single call (it times out or returns 502).
-- Chunks are fetched **concurrently**, throttled by a global semaphore to at most `MAX_CONCURRENCY` (default 3) in-flight requests at any moment. Memory stays bounded — at most 3 chunk responses are held at once, each aggregated then freed.
+- Chunks are fetched **concurrently**, throttled by a global semaphore to at most `MAX_CONCURRENCY` (default 3) in-flight requests at any moment.
 - Operational and uptime for a zone run **in parallel** (they're independent), sharing the same concurrency budget.
-- All daily rows from chunks are aggregated per switch into Maps as they arrive (no raw-row accumulation).
 - Substitution rules:
-  - Connected Load = 0 → random 0.10–0.80 (per zone's `connected-load-zero-rule`).
-  - Power Failure hours > 2.0 → random 0.80–1.50 (per `power-failure-substitution-rule`).
+  - Connected Load = 0 → random 0.10–0.80 (per `connected-load-zero-rule`).
+  - Power Failure hours > 2.0, plus ~1 in every 15–20 switches → random 0.80–1.50 (per `power-failure-substitution-rule`).
+- Output is written with **ExcelJS** (styled: merged title, bold wrapped headers, borders, frozen header, 2-decimal number formats).
